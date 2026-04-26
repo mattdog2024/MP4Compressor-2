@@ -1,0 +1,31 @@
+# 依赖
+node_modules/
+
+# 打包输出
+dist/
+
+# ffmpeg 二进制（太大，由 CI 自动下载）
+resources/ffmpeg.exe
+resources/ffprobe.exe
+
+# 截图和调试文件
+*.png
+*.log
+app_screenshot.png
+app_zoom.png
+final.png
+now.png
+now2.png
+screenshot.png
+full-install.log
+install.log
+
+# 调试脚本
+test-electron.js
+list-dist.js
+launch.js
+electron-launcher.js
+render_preview.py
+
+# 临时文件
+.memsearch/

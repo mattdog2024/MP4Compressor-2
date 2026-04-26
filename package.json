@@ -1,0 +1,54 @@
+{
+  "name": "video-compressor",
+  "version": "1.0.0",
+  "description": "Video Compressor",
+  "main": "main.js",
+  "scripts": {
+    "start": "node launch.js",
+    "build": "electron-builder --win portable"
+  },
+  "author": "Mattdog",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.0"
+  },
+  "dependencies": {
+    "fluent-ffmpeg": "^2.1.2"
+  },
+  "build": {
+    "appId": "com.mattdog.video-compressor",
+    "productName": "VideoCompressor",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "public/**/*",
+      "src/**/*",
+      "node_modules/fluent-ffmpeg/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ffmpeg.exe",
+        "to": "ffmpeg.exe"
+      },
+      {
+        "from": "resources/ffprobe.exe",
+        "to": "ffprobe.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "VideoCompressor.exe"
+    }
+  }
+}

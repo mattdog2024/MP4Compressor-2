@@ -1,0 +1,84 @@
+name: Build Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'          # 推送 v1.0.0 这样的 tag 时自动触发
+  workflow_dispatch:  # 也可以在 GitHub 网页上手动点击触发
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 安装 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. 安装项目依赖
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. 下载 ffmpeg（Windows 版）
+      - name: Download ffmpeg
+        shell: pwsh
+        run: |
+          Write-Host "Downloading ffmpeg..."
+          $url = "https://github.com/BtbN/ffmpeg-builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip" -UseBasicParsing
+          Write-Host "Extracting ffmpeg..."
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-tmp" -Force
+          # 找到 bin 目录并复制 ffmpeg.exe 和 ffprobe.exe
+          $binDir = Get-ChildItem -Path "ffmpeg-tmp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1 | Split-Path
+          New-Item -ItemType Directory -Force -Path "resources" | Out-Null
+          Copy-Item "$binDir\ffmpeg.exe" "resources\ffmpeg.exe"
+          Copy-Item "$binDir\ffprobe.exe" "resources\ffprobe.exe"
+          Write-Host "ffmpeg ready: $(Get-Item resources\ffmpeg.exe).Length bytes"
+          Remove-Item "ffmpeg.zip" -Force
+          Remove-Item "ffmpeg-tmp" -Recurse -Force
+
+      # 5. 打包成 exe
+      - name: Build portable EXE
+        run: npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 6. 上传构建产物（可以在 Actions 页面下载）
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoCompressor-Windows
+          path: dist/VideoCompressor.exe
+          retention-days: 30
+
+      # 7. 如果是 tag 触发，自动创建 GitHub Release 并附上 exe
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/VideoCompressor.exe
+          name: "视频压缩器 ${{ github.ref_name }}"
+          body: |
+            ## 视频压缩器 ${{ github.ref_name }}
+
+            ### 下载说明
+            下载 `VideoCompressor.exe`，双击即可运行，无需安装。
+
+            ### 功能特性
+            - 支持 MP4、MKV、AVI、MOV、WMV、FLV、WEBM 格式压缩
+            - 现代明亮界面，支持拖拽上传
+            - GPU 加速（NVIDIA/AMD/Intel）
+            - 支持跳过片头/片尾
+            - 支持 MKV 内置字幕烧录
+            - 支持批量压缩和并发处理
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
