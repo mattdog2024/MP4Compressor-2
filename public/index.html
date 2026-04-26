@@ -1087,7 +1087,8 @@
             const video = videos.find(v => v.id === data.id);
             if (video) {
                 video.status = 'error';
-                video.statusText = `失败: ${data.error}`;
+                video.statusText = '失败';
+                video.errorDetail = data.error || '未知错误';
                 video.progress = 0;
                 renderFileItem(video);
                 failedCount++;
@@ -1341,7 +1342,7 @@
                 ${subtitleHtml}
                 ${externalSubtitleHtml}
                 ${progressHtml}
-                <div class="file-status ${video.status}">${video.statusText}</div>
+                <div class="file-status ${video.status}">${video.statusText}${(video.status === 'error' && video.errorDetail) ? '<span onclick="showErrorDetail(' + video.id + ')" style="cursor:pointer;text-decoration:underline;font-size:11px;margin-left:6px;color:#ef4444;"> 查看详情</span>' : ''}</div>
             </div>
             <div class="file-actions">
                 ${video.status !== 'compressing' ? `<button class="btn-icon danger" onclick="removeVideo(${video.id})" title="移除">x</button>` : ''}

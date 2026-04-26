@@ -199,27 +199,55 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
             if (onCommandReady) {
                 onCommandReady(command);
             }
+
+            // 收集 stderr 输出（ffmpeg 的详细日志）
+            const stderrLines = [];
+            command.on('stderr', (line) => {
+                stderrLines.push(line);
+            });
+
             command.on('progress', (progress) => {
                 if (onProgress) {
                     onProgress(progress);
                 }
             });
             command.on('end', () => {
+                // 写入成功日志
+                try {
+                    const logPath = path.join(require('os').homedir(), 'ffmpeg-debug.log');
+                    const logContent = `[${new Date().toISOString()}] SUCCESS\nInput: ${inputPath}\nOutput: ${outputPath}\n\n`;
+                    fs.appendFileSync(logPath, logContent);
+                } catch (e) {}
                 resolve({ success: true, outputPath });
             });
-            command.on('error', (err, stdout, stderr) => {
+            command.on('error', (err) => {
                 // 被手动停止时不视为错误
                 if (err.message && (err.message.includes('SIGKILL') || err.message.includes('ffmpeg was killed'))) {
                     resolve({ success: false, stopped: true });
                     return;
                 }
-                // 记录详细错误到日志文件（方便调试）
+                // 取最后 30 行 stderr（最关键的错误信息在末尾）
+                const stderrTail = stderrLines.slice(-30).join('\n');
+                // 写入详细错误日志
                 try {
-                    const logPath = path.join(require('os').homedir(), 'ffmpeg-error.log');
-                    const logContent = `[${new Date().toISOString()}]\nInput: ${inputPath}\nError: ${err.message}\nStderr: ${stderr || ''}\n\n`;
-                    fs.appendFileSync(logPath, logContent);
+                    const logPath = path.join(require('os').homedir(), 'ffmpeg-debug.log');
+                    const logContent = [
+                        `[${new Date().toISOString()}] ERROR`,
+                        `Input: ${inputPath}`,
+                        `Output: ${outputPath}`,
+                        `Error: ${err.message}`,
+                        `--- FFmpeg stderr (last 30 lines) ---`,
+                        stderrTail,
+                        `--- end ---`,
+                        ''
+                    ].join('\n');
+                    fs.appendFileSync(logPath, logContent + '\n');
                 } catch (e) {}
-                reject(err);
+                // 把 stderr 附加到错误消息里，方便界面显示
+                const detailedError = new Error(
+                    `ffmpeg error: ${err.message}\n\n--- FFmpeg 详细错误 ---\n${stderrTail}`
+                );
+                reject(detailedError);
             });
             command.run();
         }
