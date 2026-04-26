@@ -189,7 +189,10 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
             runCommand(null);
         }
 
-        function runCommand(endTime) {
+        function runCommand(endTime, overrideOptions, isGpuRetry) {
+            // 如果是 GPU 降级重试，使用覆盖的 options
+            if (overrideOptions) options = overrideOptions;
+            isGpuRetry = isGpuRetry || false;
             const command = buildFFmpegCommand(inputPath, outputPath, options);
             // 设置结束时间点（跳过片尾）
             if (endTime !== null && endTime > 0) {
@@ -232,7 +235,7 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
                 try {
                     const logPath = path.join(require('os').homedir(), 'ffmpeg-debug.log');
                     const logContent = [
-                        `[${new Date().toISOString()}] ERROR`,
+                        `[${new Date().toISOString()}] ${isGpuRetry ? 'ERROR(CPU)' : 'ERROR(GPU->CPU fallback?)'}`,
                         `Input: ${inputPath}`,
                         `Output: ${outputPath}`,
                         `Error: ${err.message}`,
@@ -243,6 +246,26 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
                     ].join('\n');
                     fs.appendFileSync(logPath, logContent + '\n');
                 } catch (e) {}
+
+                // ★ GPU 降级逻辑：如果是 GPU 编码器失败，自动用 CPU 重试
+                const isGpuError = stderrTail.includes('nvenc') || stderrTail.includes('amf') ||
+                    stderrTail.includes('qsv') || stderrTail.includes('h264_nvenc') ||
+                    stderrTail.includes('hevc_nvenc') || stderrTail.includes('Driver does not support') ||
+                    stderrTail.includes('nvenc API version') || stderrTail.includes('Error while opening encoder');
+                if (isGpuError && !isGpuRetry) {
+                    // 记录降级日志
+                    try {
+                        const logPath = path.join(require('os').homedir(), 'ffmpeg-debug.log');
+                        fs.appendFileSync(logPath, `[${new Date().toISOString()}] GPU failed, retrying with CPU (libx264)\n\n`);
+                    } catch (e) {}
+                    // 删除可能已生成的空输出文件
+                    try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (e) {}
+                    // 用 CPU 重试
+                    const cpuOptions = Object.assign({}, options, { encoder: 'libx264' });
+                    runCommand(endTime, cpuOptions, true);
+                    return;
+                }
+
                 // 把 stderr 附加到错误消息里，方便界面显示
                 const detailedError = new Error(
                     `ffmpeg error: ${err.message}\n\n--- FFmpeg 详细错误 ---\n${stderrTail}`
