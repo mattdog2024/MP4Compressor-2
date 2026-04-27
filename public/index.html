@@ -1129,12 +1129,13 @@
             const video = videos.find(v => v.id === data.id);
             if (video) {
                 video.status = 'waiting';
-                video.statusText = '已停止';
+                video.statusText = isPaused ? '已暂停' : '已停止';
                 video.progress = 0;
                 renderFileItem(video);
                 activeTaskCount--;
-                // 如果所有活跃任务都已停止，完成压缩流程
-                if (activeTaskCount <= 0) {
+                if (activeTaskCount < 0) activeTaskCount = 0;
+                // 如果是暂停操作，不调用 finishCompression（保持 isCompressing=true）
+                if (!isPaused && activeTaskCount <= 0) {
                     activeTaskCount = 0;
                     finishCompression();
                 }
@@ -1538,21 +1539,50 @@
     }
 
     // 暂停/继续切换
-    function togglePause() {
+    async function togglePause() {
         if (!isCompressing) return;
+        const pauseBtn = document.getElementById('pause-btn');
         if (!isPaused) {
+            // 暂停：立即杀死所有 ffmpeg 进程，将未完成的文件标记为 waiting
             isPaused = true;
-            pausedQueue = [...taskQueue];
+            shouldStop = true;  // 防止 processNextTask 启动新任务
             taskQueue = [];
-            document.getElementById('pause-btn').textContent = '继续';
-            setStatus('已暂停（等待当前文件完成后停止）', false);
-        } else {
-            isPaused = false;
-            taskQueue = [...pausedQueue];
             pausedQueue = [];
-            document.getElementById('pause-btn').textContent = '暂停';
+            pauseBtn.textContent = '继续';
+            pauseBtn.disabled = true;  // 等待 ffmpeg 停止期间禁用
+            document.getElementById('stop-btn').disabled = true;
+            setStatus('暂停中...');
+            try {
+                await window.electronAPI.stopCompression();
+            } catch (e) {}
+            // ffmpeg 已停止，把压缩中的文件重置为 waiting
+            videos.forEach(v => {
+                if (v.status === 'compressing') {
+                    v.status = 'waiting';
+                    v.statusText = '已暂停';
+                    v.progress = 0;
+                    renderFileItem(v);
+                }
+            });
+            // 重置活跃任务计数
+            activeTaskCount = 0;
+            // 恢复按钮状态
+            pauseBtn.disabled = false;
+            document.getElementById('stop-btn').disabled = false;
+            // 保持 isCompressing=true，这样用户可以点继续
+            isCompressing = true;
+            shouldStop = false;
+            setStatus('已暂停，点击“继续”重新开始');
+        } else {
+            // 继续：重新压缩所有 waiting 状态的文件
+            isPaused = false;
+            shouldStop = false;
+            // 重新构建任务队列（所有 waiting 和 error 状态的文件）
+            taskQueue = videos.filter(v => v.status === 'waiting' || v.status === 'error').map(v => v.id);
+            pauseBtn.textContent = '暂停';
             setStatus('压缩中...', true);
-            const slots = concurrency - activeTaskCount;
+            // 启动并发任务
+            const slots = Math.min(concurrency, taskQueue.length);
             for (let i = 0; i < slots; i++) {
                 processNextTask();
             }
@@ -1735,17 +1765,26 @@
         modal.style.display = 'none';
         if (!session) return;
         // 恢复设置
-        if (session.outputDir) { outputDir = session.outputDir; document.getElementById('output-dir-text').textContent = outputDir; }
-        if (session.crfValue) { crfValue = session.crfValue; }
-        if (session.resolutionWidth) { resolutionWidth = session.resolutionWidth; }
-        if (session.skipStart) { skipStart = session.skipStart; document.getElementById('skip-start').value = skipStart; }
-        if (session.skipEnd) { skipEnd = session.skipEnd; document.getElementById('skip-end').value = skipEnd; }
+        if (session.outputDir) {
+            outputDir = session.outputDir;
+            const dirDisplay = document.getElementById('output-dir-display');
+            if (dirDisplay) dirDisplay.textContent = outputDir;
+        }
+        if (session.crfValue !== undefined) crfValue = session.crfValue;
+        if (session.resolutionWidth !== undefined) resolutionWidth = session.resolutionWidth;
+        if (session.skipStart) { skipStart = session.skipStart; const el = document.getElementById('skip-start'); if (el) el.value = skipStart; }
+        if (session.skipEnd) { skipEnd = session.skipEnd; const el = document.getElementById('skip-end'); if (el) el.value = skipEnd; }
         // 恢复文件列表（只恢复未完成的）
         const pending = session.videos.filter(v => v.status === 'waiting' || v.status === 'error');
-        videos = pending.map(v => Object.assign({ progress: 0, status: 'waiting', statusText: '' }, v));
-        renderFileList();
-        document.getElementById('start-btn').disabled = false;
-        setStatus(`已恢复 ${videos.length} 个未完成任务`);
+        videos = pending.map(v => Object.assign({ progress: 0, status: 'waiting', statusText: '等待中' }, v));
+        // 清空列表并重新渲染所有文件
+        const fileList = document.getElementById('file-list');
+        fileList.innerHTML = '';
+        videos.forEach(v => appendFileItem(v));
+        updateFileCount();
+        document.getElementById('start-btn').disabled = videos.length === 0;
+        document.getElementById('clear-btn').style.display = videos.length > 0 ? '' : 'none';
+        setStatus(`已恢复 ${videos.length} 个未完成任务，点击开始压缩`);
     }
     // ==================== 工具函数 ====================
     function formatSize(bytes) {
