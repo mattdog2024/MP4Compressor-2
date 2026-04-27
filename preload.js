@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onComplete: (callback) => ipcRenderer.on('compression-complete', callback),
     onError: (callback) => ipcRenderer.on('compression-error', callback),
     onStart: (callback) => ipcRenderer.on('compression-start', callback),
+    onStopped: (callback) => ipcRenderer.on('compression-stopped', callback),
 
     // 移除监听
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)

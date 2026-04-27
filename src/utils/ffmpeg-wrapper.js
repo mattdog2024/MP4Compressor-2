@@ -225,7 +225,7 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
             });
             command.on('error', (err) => {
                 // 被手动停止时不视为错误
-                if (err.message && (err.message.includes('SIGKILL') || err.message.includes('ffmpeg was killed'))) {
+                if (err.message && (err.message.includes('SIGKILL') || err.message.includes('ffmpeg was killed') || err.message.includes('SIGTERM') || err.message.includes('killed') || err.message.includes('exited with code null'))) {
                     resolve({ success: false, stopped: true });
                     return;
                 }

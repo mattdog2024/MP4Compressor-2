@@ -1124,6 +1124,23 @@
             }
         });
 
+        // 注册停止事件（ffmpeg 被手动杀死时触发）
+        window.electronAPI.onStopped((event, data) => {
+            const video = videos.find(v => v.id === data.id);
+            if (video) {
+                video.status = 'waiting';
+                video.statusText = '已停止';
+                video.progress = 0;
+                renderFileItem(video);
+                activeTaskCount--;
+                // 如果所有活跃任务都已停止，完成压缩流程
+                if (activeTaskCount <= 0) {
+                    activeTaskCount = 0;
+                    finishCompression();
+                }
+            }
+        });
+
         // 拖拽支持
         const dropZone = document.getElementById('drop-zone');
         document.body.addEventListener('dragover', (e) => {
@@ -1602,31 +1619,53 @@
     }
 
     async function stopCompression() {
+        if (!isCompressing) return;
         shouldStop = true;
+        pausedQueue = [];
         taskQueue = [];
+        // 立即更新 UI，禁用按钮防止重复点击
+        document.getElementById('stop-btn').disabled = true;
+        document.getElementById('pause-btn').disabled = true;
+        setStatus('停止中...');
         try {
             await window.electronAPI.stopCompression();
         } catch (e) {}
-        setStatus('已停止');
-        finishCompression();
+        // 如果没有活跃任务（已经全部完成），直接结束
+        if (activeTaskCount <= 0) {
+            activeTaskCount = 0;
+            setStatus('已停止');
+            finishCompression();
+        }
+        // 否则等待 onStopped 事件触发 finishCompression
     }
 
     function finishCompression() {
         isCompressing = false;
         isPaused = false;
-        document.getElementById('start-btn').style.display = '';
-        document.getElementById('start-btn').disabled = false;
-        document.getElementById('stop-btn').style.display = 'none';
-        document.getElementById('pause-btn').style.display = 'none';
+        const stopBtn = document.getElementById('stop-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const startBtn = document.getElementById('start-btn');
+        stopBtn.style.display = 'none';
+        stopBtn.disabled = false;  // 重置 disabled，下次可用
+        pauseBtn.style.display = 'none';
+        pauseBtn.disabled = false;
+        pauseBtn.textContent = '暂停';
+        startBtn.style.display = '';
+        startBtn.disabled = videos.length === 0;
         document.getElementById('overall-progress').style.display = 'none';
 
-        if (completedCount > 0 || failedCount > 0) {
+        if (shouldStop) {
+            // 是手动停止的
+            const msg = completedCount > 0 ? `已停止（已完成 ${completedCount} 个）` : '已停止';
+            setStatus(msg);
+            if (completedCount > 0 || failedCount > 0) updateStats();
+        } else if (completedCount > 0 || failedCount > 0) {
             setStatus(`完成 ${completedCount} 个${failedCount > 0 ? '，失败 ' + failedCount + ' 个' : ''}`);
             updateStats();
         } else {
             setStatus('就绪');
         }
-        // 全部完成后清除 session
+        // 全部正常完成后才清除 session
         const allDone = videos.every(v => v.status === 'done' || v.status === 'error');
         if (allDone) clearSession();
     }

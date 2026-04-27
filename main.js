@@ -224,6 +224,14 @@ ipcMain.handle('start-compression', async (event, task) => {
 
         activeTasks.delete(id);
 
+        // 如果是被手动停止的，发送 stopped 事件，不发送 complete
+        if (command && command.stopped) {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('compression-stopped', { id });
+            }
+            return { success: false, stopped: true };
+        }
+
         // 获取输出文件大小
         let outputSize = 0;
         try {
