@@ -251,6 +251,13 @@
             background: #059669;
         }
 
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+        .btn-warning:hover {
+            background: #d97706;
+        }
         .btn-danger {
             background: var(--danger);
             color: white;
@@ -810,6 +817,17 @@
     </style>
 </head>
 <body>
+    <!-- 崩溃恢复弹窗 -->
+    <div id="recover-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:none;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.18);">
+            <h3 style="margin:0 0 12px;font-size:17px;color:#1a1a2e;">发现未完成的压缩任务</h3>
+            <p style="margin:0 0 20px;color:#555;font-size:14px;line-height:1.6;" id="recover-desc">上次有若干个文件未完成压缩，是否继续？</p>
+            <div style="display:flex;gap:12px;justify-content:flex-end;">
+                <button onclick="dismissRecover()" style="padding:8px 20px;border:1px solid #ddd;border-radius:8px;background:#f5f5f5;cursor:pointer;font-size:14px;">忽略</button>
+                <button onclick="doRecover()" style="padding:8px 20px;border:none;border-radius:8px;background:#6c63ff;color:#fff;cursor:pointer;font-size:14px;">继续压缩</button>
+            </div>
+        </div>
+    </div>
 
     <!-- 顶部标题栏 -->
     <div class="titlebar">
@@ -1009,6 +1027,9 @@
             <button class="btn btn-danger" id="stop-btn" onclick="stopCompression()" style="display:none">
                 停止
             </button>
+            <button class="btn btn-warning" id="pause-btn" onclick="togglePause()" style="display:none">
+                暂停
+            </button>
             <button class="btn btn-success" id="start-btn" onclick="startCompression()" disabled>
                 开始压缩
             </button>
@@ -1032,8 +1053,12 @@
     let totalSavedBytes = 0;
     let taskQueue = [];
     let shouldStop = false;
+    let isPaused = false;       // 是否暂停中
+    let pausedQueue = [];       // 暂停时保存的剩余队列
     let skipStart = 0; // 跳过片头秒数
     let skipEnd = 0;   // 跳过片尾秒数
+    // 任务持久化路径（通过 main 进程获取）
+    const SESSION_KEY = 'vc_session';
 
     // ==================== 初始化 ====================
     window.addEventListener('DOMContentLoaded', async () => {
@@ -1079,6 +1104,7 @@
                 activeTaskCount--;
                 updateStats();
                 updateOverallProgress();
+                saveSession(); // 更新持久化状态
                 processNextTask();
             }
         });
@@ -1118,6 +1144,9 @@
                 addVideoFiles(files.map(f => f.path));
             }
         });
+
+        // 检查是否有未完成的任务需要恢复
+        checkRecover();
     });
 
     // ==================== 文件操作 ====================
@@ -1464,6 +1493,7 @@
         if (videos.length === 0 || isCompressing) return;
 
         isCompressing = true;
+        isPaused = false;
         shouldStop = false;
         completedCount = 0;
         failedCount = 0;
@@ -1472,6 +1502,8 @@
 
         document.getElementById('start-btn').style.display = 'none';
         document.getElementById('stop-btn').style.display = '';
+        document.getElementById('pause-btn').style.display = '';
+        document.getElementById('pause-btn').textContent = '暂停';
         document.getElementById('overall-progress').style.display = '';
         document.getElementById('stats-card').style.display = 'none';
         setStatus('压缩中...', true);
@@ -1479,9 +1511,34 @@
         // 重置等待中的任务
         taskQueue = videos.filter(v => v.status === 'waiting' || v.status === 'error').map(v => v.id);
 
+        // 保存 session（崩溃恢复用）
+        saveSession();
+
         // 启动并发任务
         for (let i = 0; i < concurrency; i++) {
             processNextTask();
+        }
+    }
+
+    // 暂停/继续切换
+    function togglePause() {
+        if (!isCompressing) return;
+        if (!isPaused) {
+            isPaused = true;
+            pausedQueue = [...taskQueue];
+            taskQueue = [];
+            document.getElementById('pause-btn').textContent = '继续';
+            setStatus('已暂停（等待当前文件完成后停止）', false);
+        } else {
+            isPaused = false;
+            taskQueue = [...pausedQueue];
+            pausedQueue = [];
+            document.getElementById('pause-btn').textContent = '暂停';
+            setStatus('压缩中...', true);
+            const slots = concurrency - activeTaskCount;
+            for (let i = 0; i < slots; i++) {
+                processNextTask();
+            }
         }
     }
 
@@ -1556,9 +1613,11 @@
 
     function finishCompression() {
         isCompressing = false;
+        isPaused = false;
         document.getElementById('start-btn').style.display = '';
         document.getElementById('start-btn').disabled = false;
         document.getElementById('stop-btn').style.display = 'none';
+        document.getElementById('pause-btn').style.display = 'none';
         document.getElementById('overall-progress').style.display = 'none';
 
         if (completedCount > 0 || failedCount > 0) {
@@ -1567,8 +1626,88 @@
         } else {
             setStatus('就绪');
         }
+        // 全部完成后清除 session
+        const allDone = videos.every(v => v.status === 'done' || v.status === 'error');
+        if (allDone) clearSession();
     }
 
+    // ==================== Session 持久化（崩溃恢复）====================
+    function saveSession() {
+        try {
+            const pendingVideos = videos.filter(v => v.status !== 'done').map(v => ({
+                id: v.id,
+                path: v.path,
+                name: v.name,
+                size: v.size,
+                duration: v.duration,
+                width: v.width,
+                height: v.height,
+                status: v.status === 'compressing' ? 'waiting' : v.status, // 压缩中的重置为等待
+                selectedSubtitleIndex: v.selectedSubtitleIndex,
+                externalSubtitlePath: v.externalSubtitlePath
+            }));
+            if (pendingVideos.length === 0) { clearSession(); return; }
+            const session = {
+                savedAt: Date.now(),
+                outputDir,
+                volume,
+                concurrency,
+                crfValue,
+                resolutionWidth,
+                useGPU,
+                skipStart,
+                skipEnd,
+                videos: pendingVideos
+            };
+            localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+        } catch (e) {}
+    }
+    function clearSession() {
+        try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    }
+    function loadSession() {
+        try {
+            const raw = localStorage.getItem(SESSION_KEY);
+            if (!raw) return null;
+            return JSON.parse(raw);
+        } catch (e) { return null; }
+    }
+    function checkRecover() {
+        const session = loadSession();
+        if (!session || !session.videos || session.videos.length === 0) return;
+        const pending = session.videos.filter(v => v.status === 'waiting' || v.status === 'error');
+        if (pending.length === 0) { clearSession(); return; }
+        // 检查文件是否还存在
+        // 显示恢复弹窗
+        const modal = document.getElementById('recover-modal');
+        document.getElementById('recover-desc').textContent =
+            `上次有 ${pending.length} 个文件未完成压缩，是否继续？`;
+        modal.style.display = 'flex';
+        // 保存 session 供恢复使用
+        modal._session = session;
+    }
+    function dismissRecover() {
+        document.getElementById('recover-modal').style.display = 'none';
+        clearSession();
+    }
+    function doRecover() {
+        const modal = document.getElementById('recover-modal');
+        const session = modal._session;
+        modal.style.display = 'none';
+        if (!session) return;
+        // 恢复设置
+        if (session.outputDir) { outputDir = session.outputDir; document.getElementById('output-dir-text').textContent = outputDir; }
+        if (session.crfValue) { crfValue = session.crfValue; }
+        if (session.resolutionWidth) { resolutionWidth = session.resolutionWidth; }
+        if (session.skipStart) { skipStart = session.skipStart; document.getElementById('skip-start').value = skipStart; }
+        if (session.skipEnd) { skipEnd = session.skipEnd; document.getElementById('skip-end').value = skipEnd; }
+        // 恢复文件列表（只恢复未完成的）
+        const pending = session.videos.filter(v => v.status === 'waiting' || v.status === 'error');
+        videos = pending.map(v => Object.assign({ progress: 0, status: 'waiting', statusText: '' }, v));
+        renderFileList();
+        document.getElementById('start-btn').disabled = false;
+        setStatus(`已恢复 ${videos.length} 个未完成任务`);
+    }
     // ==================== 工具函数 ====================
     function formatSize(bytes) {
         if (!bytes || bytes === 0) return '0 B';
