@@ -1,6 +1,6 @@
 {
   "name": "video-compressor",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Video Compressor",
   "main": "main.js",
   "scripts": {
@@ -49,6 +49,7 @@
     },
     "portable": {
       "artifactName": "VideoCompressor.exe"
-    }
+    },
+    "publish": null
   }
 }
