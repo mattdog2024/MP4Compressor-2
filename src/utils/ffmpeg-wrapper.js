@@ -77,7 +77,8 @@ function buildFFmpegCommand(inputPath, outputPath, options) {
     // 分辨率缩放（-1 表示保持原始）
     if (width && width > 0) {
         // force_original_aspect_ratio=decrease 确保只缩小不放大
-        videoFilters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease`);
+        // trunc(ow/2)*2 和 trunc(oh/2)*2 强制宽高为偶数（libx264 要求）
+        videoFilters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`);
     }
 
     // 烧录内置字幕（MKV 内置字幕流）
