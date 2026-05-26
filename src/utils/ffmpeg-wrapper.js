@@ -54,7 +54,8 @@ function buildFFmpegCommand(inputPath, outputPath, options) {
         skipEnd = 0,
         subtitlePath = null,       // 外部字幕文件路径（备用）
         subtitleStreamIndex = -1,  // MKV 内置字幕流索引（-1 表示不烧录）
-        encoder = 'libx264'
+        encoder = 'libx264',
+        disableAudio = false
     } = options;
 
     const { ffmpegPath, ffprobePath } = getFFmpegPaths();
@@ -131,29 +132,30 @@ function buildFFmpegCommand(inputPath, outputPath, options) {
         command.outputOptions(['-crf', String(crf), '-preset', preset]);
     }
 
-    // 音频处理
-    // 先尝试直接复制音频流（速度快，不损失质量）
-    // 如果音频格式不兼容 MP4 容器（如 EAC3、DTS、FLAC），则重新编码为 AAC
-    if (volume !== 1.0) {
-        // 需要调整音量，必须重新编码
-        command.audioFilters(`volume=${volume}`);
-        command.audioCodec('aac');
-        command.audioBitrate('192k');
+    // 默认只转第一条音轨。某些文件带有空的或损坏的附加音轨，
+    // 转换所有音轨会导致整个 MP4 因 AAC 编码失败而无法输出。
+    if (disableAudio) {
+        command.noAudio();
     } else {
-        // 不需要调整音量，尝试直接复制；如果格式不兼容则自动转 AAC
-        // 用 -c:a copy 先尝试，不兼容时 ffmpeg 会报错
-        // 为了兼容性，直接转 AAC（速度也很快）
+        if (volume !== 1.0) {
+            command.audioFilters(`volume=${volume}`);
+        }
         command.audioCodec('aac');
         command.audioBitrate('192k');
     }
 
     // 输出选项
-    command.outputOptions([
+    const outputOptions = [
         '-movflags', '+faststart',
         '-map_metadata', '-1',  // 去掉元数据，减小文件体积
         '-map', '0:v:0',        // 只取第一条视频流
-        '-map', '0:a?',         // 取所有音频流（? 表示没有时不报错）
-    ]);
+    ];
+    if (disableAudio) {
+        outputOptions.push('-an');
+    } else {
+        outputOptions.push('-map', '0:a:0?'); // 仅第一条音轨；没有音轨时继续输出
+    }
+    command.outputOptions(outputOptions);
     command.output(outputPath);
 
     return command;
@@ -264,6 +266,21 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
                     // 用 CPU 重试
                     const cpuOptions = Object.assign({}, options, { encoder: 'libx264' });
                     runCommand(endTime, cpuOptions, true);
+                    return;
+                }
+
+                // 如果音轨异常导致 AAC 打不开，保底改成无音频输出，避免整批任务卡死。
+                const isAudioPacketError = stderrTail.includes('Could not open encoder before EOF') ||
+                    stderrTail.includes('received no packets') ||
+                    stderrTail.includes('Nothing was written into output file');
+                if (isAudioPacketError && !options.disableAudio) {
+                    try {
+                        const logPath = path.join(require('os').homedir(), 'ffmpeg-debug.log');
+                        fs.appendFileSync(logPath, `[${new Date().toISOString()}] Audio failed, retrying without audio\n\n`);
+                    } catch (e) {}
+                    try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (e) {}
+                    const noAudioOptions = Object.assign({}, options, { disableAudio: true });
+                    runCommand(endTime, noAudioOptions, isGpuRetry);
                     return;
                 }
 
