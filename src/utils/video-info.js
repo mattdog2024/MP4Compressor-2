@@ -29,7 +29,8 @@ function getVideoInfo(filePath) {
             }
 
             const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-            const audioStream = metadata.streams.find(s => s.codec_type === 'audio');
+            const audioStreams = metadata.streams.filter(s => s.codec_type === 'audio');
+            const audioStream = audioStreams[0];
             const subtitleStreams = metadata.streams.filter(s => s.codec_type === 'subtitle');
 
             const info = {
@@ -40,6 +41,16 @@ function getVideoInfo(filePath) {
                 bitrate: parseInt(metadata.format.bit_rate) || 0,
                 size: parseInt(metadata.format.size) || 0,
                 hasAudio: !!audioStream,
+                audioCount: audioStreams.length,
+                audioTracks: audioStreams.map((audio, index) => ({
+                    index: index,
+                    streamIndex: audio.index,
+                    codec: audio.codec_name || 'unknown',
+                    channels: audio.channels || 0,
+                    channelLayout: audio.channel_layout || '',
+                    title: audio.tags ? audio.tags.title || `音轨${index + 1}` : `音轨${index + 1}`,
+                    language: audio.tags ? audio.tags.language || 'unknown' : 'unknown'
+                })),
                 hasSubtitles: subtitleStreams.length > 0,
                 subtitleCount: subtitleStreams.length,
                 subtitles: subtitleStreams.map((sub, index) => ({

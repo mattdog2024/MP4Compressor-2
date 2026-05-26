@@ -55,7 +55,9 @@ function buildFFmpegCommand(inputPath, outputPath, options) {
         subtitlePath = null,       // 外部字幕文件路径（备用）
         subtitleStreamIndex = -1,  // MKV 内置字幕流索引（-1 表示不烧录）
         encoder = 'libx264',
-        disableAudio = false
+        disableAudio = false,
+        selectedAudioStreamIndex = 0,
+        tolerantDecoding = false
     } = options;
 
     const { ffmpegPath, ffprobePath } = getFFmpegPaths();
@@ -70,7 +72,11 @@ function buildFFmpegCommand(inputPath, outputPath, options) {
     }
 
     // 忽略未知数据流（防止特殊编码的视频崩溃）
-    command.inputOptions(['-ignore_unknown']);
+    const inputOptions = ['-ignore_unknown'];
+    if (tolerantDecoding) {
+        inputOptions.push('-err_detect', 'ignore_err', '-fflags', '+discardcorrupt');
+    }
+    command.inputOptions(inputOptions);
 
     // 视频滤镜
     const videoFilters = [];
@@ -153,7 +159,10 @@ function buildFFmpegCommand(inputPath, outputPath, options) {
     if (disableAudio) {
         outputOptions.push('-an');
     } else {
-        outputOptions.push('-map', '0:a:0?'); // 仅第一条音轨；没有音轨时继续输出
+        const audioStreamIndex = Number.isInteger(selectedAudioStreamIndex) && selectedAudioStreamIndex >= 0
+            ? selectedAudioStreamIndex
+            : 0;
+        outputOptions.push('-map', `0:a:${audioStreamIndex}?`); // 仅选中的一条音轨；没有音轨时继续输出
     }
     command.outputOptions(outputOptions);
     command.output(outputPath);
@@ -269,8 +278,27 @@ function compressVideo(inputPath, outputPath, options, onProgress, onCommandRead
                     return;
                 }
 
+                // 文件有坏块时，先用更宽容的解码方式重试。
+                const isDecodeError = stderrTail.includes('Decode error rate') ||
+                    stderrTail.includes('Invalid data found when processing input') ||
+                    stderrTail.includes('Error submitting packet to decoder') ||
+                    stderrTail.includes('corrupt decoded frame') ||
+                    stderrTail.includes('channel element');
+                if (isDecodeError && !options.tolerantDecoding) {
+                    try {
+                        const logPath = path.join(require('os').homedir(), 'ffmpeg-debug.log');
+                        fs.appendFileSync(logPath, `[${new Date().toISOString()}] Decode failed, retrying with tolerant decoding\n\n`);
+                    } catch (e) {}
+                    try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (e) {}
+                    const tolerantOptions = Object.assign({}, options, { tolerantDecoding: true });
+                    runCommand(endTime, tolerantOptions, isGpuRetry);
+                    return;
+                }
+
                 // 如果音轨异常导致 AAC 打不开，保底改成无音频输出，避免整批任务卡死。
                 const isAudioPacketError = stderrTail.includes('Could not open encoder before EOF') ||
+                    stderrTail.includes('Error submitting packet to decoder') ||
+                    stderrTail.includes('channel element') ||
                     stderrTail.includes('received no packets') ||
                     stderrTail.includes('Nothing was written into output file');
                 if (isAudioPacketError && !options.disableAudio) {

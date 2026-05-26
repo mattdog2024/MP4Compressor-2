@@ -184,6 +184,7 @@ ipcMain.handle('start-compression', async (event, task) => {
         selectedSubtitleIndex = -1,
         subtitlePath = null,
         externalSubtitleStreamIndex = 0,
+        selectedAudioStreamIndex = 0,
         encoder = 'libx264'
     } = task;
 
@@ -202,6 +203,7 @@ ipcMain.handle('start-compression', async (event, task) => {
             subtitleStreamIndex: selectedSubtitleIndex >= 0 ? selectedSubtitleIndex : -1,
             subtitlePath: subtitlePath,
             externalSubtitleStreamIndex: externalSubtitleStreamIndex,
+            selectedAudioStreamIndex: selectedAudioStreamIndex,
             encoder: encoder
         };
 

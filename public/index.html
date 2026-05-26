@@ -789,6 +789,15 @@
             border-color: var(--primary);
         }
 
+        .audio-label {
+            color: #0f766e;
+            background: #ccfbf1;
+        }
+
+        .audio-select {
+            border-color: #99f6e4;
+        }
+
         /* 完成统计 */
         .stats-row {
             display: flex;
@@ -1218,6 +1227,8 @@
                 resolution: '',
                 subtitles: [],       // 内置字幕轨道列表
                 selectedSubtitleIndex: -1,  // -1 表示不烧录字幕
+                audioTracks: [],
+                selectedAudioStreamIndex: 0,
                 externalSubtitlePath: null // 外挂字幕路径
             };
             videos.push(video);
@@ -1233,6 +1244,10 @@
                 if (info.subtitles && info.subtitles.length > 0) {
                     video.subtitles = info.subtitles;
                     video.selectedSubtitleIndex = -1; // 默认不烧录
+                }
+                if (info.audioTracks && info.audioTracks.length > 0) {
+                    video.audioTracks = info.audioTracks;
+                    video.selectedAudioStreamIndex = 0; // 默认第一条音轨
                 }
                 renderFileItem(video);
             } catch (e) {
@@ -1314,6 +1329,31 @@
         if (video.size) metaItems.push(formatSize(video.size));
         if (video.resolution) metaItems.push(video.resolution);
         if (video.duration) metaItems.push(video.duration);
+        if (video.audioTracks && video.audioTracks.length > 1) metaItems.push(`${video.audioTracks.length} 条音轨`);
+
+        let audioHtml = '';
+        if (video.audioTracks && video.audioTracks.length > 1 && video.status !== 'compressing' && video.status !== 'done') {
+            const options = video.audioTracks.map((track, i) => {
+                const lang = track.language && track.language !== 'unknown' ? track.language : '';
+                const title = track.title && track.title !== `音轨${i + 1}` ? track.title : '';
+                const name = [lang, title].filter(Boolean).join(' / ') || `音轨 ${i + 1}`;
+                const details = [track.codec, track.channelLayout || (track.channels ? `${track.channels} 声道` : '')]
+                    .filter(Boolean).join('，');
+                const selected = video.selectedAudioStreamIndex === i ? 'selected' : '';
+                return `<option value="${i}" ${selected}>${name}${details ? ` (${details})` : ''}</option>`;
+            }).join('');
+            audioHtml = `
+                <div class="subtitle-row">
+                    <span class="subtitle-label audio-label">音轨</span>
+                    <select class="subtitle-select audio-select" onchange="selectAudioTrack(${video.id}, this.value)">
+                        ${options}
+                    </select>
+                </div>`;
+        } else if (video.audioTracks && video.audioTracks.length === 1) {
+            const track = video.audioTracks[0];
+            const lang = track.language && track.language !== 'unknown' ? track.language : '默认';
+            metaItems.push(`音轨：${lang}`);
+        }
 
         // 字幕选择下拉框（只对有内置字幕的文件显示）
         let subtitleHtml = '';
@@ -1386,6 +1426,7 @@
                 <div class="file-meta">
                     ${metaItems.map(m => `<span class="file-meta-item">${m}</span>`).join('<span class="file-meta-item">·</span>')}
                 </div>
+                ${audioHtml}
                 ${subtitleHtml}
                 ${externalSubtitleHtml}
                 ${progressHtml}
@@ -1465,6 +1506,14 @@
         const video = videos.find(v => v.id === videoId);
         if (video) {
             video.selectedSubtitleIndex = parseInt(value);
+        }
+    }
+
+    function selectAudioTrack(videoId, value) {
+        const video = videos.find(v => v.id === videoId);
+        if (video) {
+            video.selectedAudioStreamIndex = parseInt(value);
+            saveSession();
         }
     }
 
@@ -1633,6 +1682,7 @@
                 skipStart: skipStart,
                 skipEnd: skipEnd,
                 selectedSubtitleIndex: video.selectedSubtitleIndex !== undefined ? video.selectedSubtitleIndex : -1,
+                selectedAudioStreamIndex: video.selectedAudioStreamIndex !== undefined ? video.selectedAudioStreamIndex : 0,
                 subtitlePath: video.externalSubtitlePath || null,
                 externalSubtitleStreamIndex: video.selectedExternalSubtitleIndex !== undefined ? video.selectedExternalSubtitleIndex : 0,
                 encoder: encoder
@@ -1713,6 +1763,8 @@
                 height: v.height,
                 status: v.status === 'compressing' ? 'waiting' : v.status, // 压缩中的重置为等待
                 selectedSubtitleIndex: v.selectedSubtitleIndex,
+                audioTracks: v.audioTracks,
+                selectedAudioStreamIndex: v.selectedAudioStreamIndex,
                 externalSubtitlePath: v.externalSubtitlePath
             }));
             if (pendingVideos.length === 0) { clearSession(); return; }
